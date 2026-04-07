@@ -1,0 +1,5 @@
+{
+  "name": "Aivilo - Olivia Hayden's AI Talent Agent",
+  "description": "I'm Olivia's digital assistant. I can tell you about her background and experiences more in depth.",
+  "requestFramePermissions": ["microphone"]
+}
