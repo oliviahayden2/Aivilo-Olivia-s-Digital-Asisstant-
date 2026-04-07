@@ -18,6 +18,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sessionRef = useRef<any>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -63,6 +64,17 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
     statusRef.current = status;
   }, [status]);
 
+  useEffect(() => {
+    return () => {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
+
   const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
     let binary = '';
     const bytes = new Uint8Array(buffer);
@@ -74,33 +86,41 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
 
   // Audio Playback Logic
   const playNextInQueue = useCallback(async () => {
-    if (audioQueueRef.current.length === 0 || isPlayingRef.current) return;
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) return;
     
     isPlayingRef.current = true;
     setIsSpeaking(true);
     
     const ctx = audioContextRef.current;
-    if (!ctx) return;
-
-    while (audioQueueRef.current.length > 0) {
-      const pcmData = audioQueueRef.current.shift()!;
-      const buffer = ctx.createBuffer(1, pcmData.length, 24000);
-      buffer.getChannelData(0).set(pcmData);
-      
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      
-      const playPromise = new Promise<void>((resolve) => {
-        source.onended = () => resolve();
-      });
-      
-      source.start();
-      await playPromise;
+    if (!ctx) {
+      isPlayingRef.current = false;
+      setIsSpeaking(false);
+      return;
     }
-    
-    isPlayingRef.current = false;
-    setIsSpeaking(false);
+
+    try {
+      while (audioQueueRef.current.length > 0) {
+        const pcmData = audioQueueRef.current.shift();
+        if (!pcmData) continue;
+
+        const buffer = ctx.createBuffer(1, pcmData.length, 24000);
+        buffer.getChannelData(0).set(pcmData);
+        
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        
+        await new Promise<void>((resolve) => {
+          source.onended = () => resolve();
+          source.start();
+        });
+      }
+    } catch (err) {
+      console.error("Playback error:", err);
+    } finally {
+      isPlayingRef.current = false;
+      setIsSpeaking(false);
+    }
   }, []);
 
   const connect = async () => {
@@ -136,48 +156,54 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
             
             // Start streaming audio
             const processor = ctx.createScriptProcessor(4096, 1, 1);
+            processorRef.current = processor;
             source.connect(processor);
             processor.connect(ctx.destination);
 
             processor.onaudioprocess = (e) => {
               if (statusRef.current === 'ONLINE' && sessionRef.current) {
-                const inputData = e.inputBuffer.getChannelData(0);
-                // Convert to 16-bit PCM
-                const pcm16 = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                  pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                try {
+                  const inputData = e.inputBuffer.getChannelData(0);
+                  const pcm16 = new Int16Array(inputData.length);
+                  for (let i = 0; i < inputData.length; i++) {
+                    pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                  }
+                  const base64 = arrayBufferToBase64(pcm16.buffer);
+                  sessionRef.current.sendRealtimeInput({
+                    audio: { data: base64, mimeType: 'audio/pcm;rate=16000' }
+                  });
+                } catch (err) {
+                  console.error("Error sending audio:", err);
                 }
-                const base64 = arrayBufferToBase64(pcm16.buffer);
-                sessionRef.current.sendRealtimeInput({
-                  audio: { data: base64, mimeType: 'audio/pcm;rate=16000' }
-                });
               }
             };
           },
           onmessage: async (message: LiveServerMessage) => {
-            const serverContent = message.serverContent as any;
+            try {
+              const serverContent = message.serverContent as any;
 
-            // Handle User Transcription
-            const userParts = serverContent?.userTurn?.parts;
-            if (userParts) {
-              const text = userParts.map((p: any) => p.text).join(' ').trim();
-              if (text) {
-                setCurrentTranscription({ role: 'user', text });
+              // Handle User Transcription
+              const userTurn = serverContent?.userTurn;
+              if (userTurn?.parts) {
+                const text = userTurn.parts.map((p: any) => p.text).join(' ').trim();
+                if (text) {
+                  setCurrentTranscription({ role: 'user', text });
+                }
               }
-            }
 
-            // Handle Model Turn (Audio + Transcription)
-            const modelTurn = serverContent?.modelTurn;
-            if (modelTurn) {
-              const parts = modelTurn.parts;
-              if (parts) {
-                for (const part of parts) {
+              // Handle Model Turn (Audio + Transcription)
+              const modelTurn = serverContent?.modelTurn;
+              if (modelTurn?.parts) {
+                for (const part of modelTurn.parts) {
                   if (part.inlineData?.data) {
                     const base64Audio = part.inlineData.data;
                     const binary = atob(base64Audio);
                     const bytes = new Uint8Array(binary.length);
                     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    const pcm16 = new Int16Array(bytes.buffer);
+                    
+                    // Ensure even number of bytes for Int16Array
+                    const alignedLength = bytes.length - (bytes.length % 2);
+                    const pcm16 = new Int16Array(bytes.buffer.slice(0, alignedLength));
                     const float32 = new Float32Array(pcm16.length);
                     for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 0x7FFF;
                     
@@ -194,24 +220,26 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
                   }
                 }
               }
-            }
 
-            // Handle Turn Completion / Interruption
-            if (serverContent?.turnComplete) {
-              setCurrentTranscription(prev => {
-                if (prev) setTranscriptions(t => [...t, prev]);
-                return null;
-              });
-            }
+              // Handle Turn Completion / Interruption
+              if (serverContent?.turnComplete) {
+                setCurrentTranscription(prev => {
+                  if (prev) setTranscriptions(t => [...t, prev]);
+                  return null;
+                });
+              }
 
-            if (serverContent?.interrupted) {
-              audioQueueRef.current = [];
-              isPlayingRef.current = false;
-              setIsSpeaking(false);
-              setCurrentTranscription(prev => {
-                if (prev) setTranscriptions(t => [...t, { ...prev, text: prev.text + ' [Interrupted]' }]);
-                return null;
-              });
+              if (serverContent?.interrupted) {
+                audioQueueRef.current = [];
+                isPlayingRef.current = false;
+                setIsSpeaking(false);
+                setCurrentTranscription(prev => {
+                  if (prev) setTranscriptions(t => [...t, { ...prev, text: prev.text + ' [Interrupted]' }]);
+                  return null;
+                });
+              }
+            } catch (err) {
+              console.error("Error processing message:", err);
             }
           },
           onerror: (err) => {
@@ -236,10 +264,15 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
 
       sessionRef.current = await sessionPromise;
       
+      // Wait a moment for the session to stabilize
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       // Send initial greeting to trigger model response
-      sessionRef.current.sendRealtimeInput({
-        text: "Bonjour, I'm Olivia's digital assistant. I can tell you about her background and experiences more in depth."
-      });
+      if (sessionRef.current) {
+        sessionRef.current.sendRealtimeInput({
+          text: "Bonjour, I'm Olivia's digital assistant. I can tell you about her background and experiences more in depth."
+        });
+      }
 
     } catch (err) {
       console.error("Failed to connect:", err);
@@ -252,6 +285,10 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
     if (sessionRef.current) {
       sessionRef.current.close();
       sessionRef.current = null;
+    }
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -454,7 +491,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
         <div className="border-t border-slate-100 pt-8 flex justify-between items-end font-mono text-[10px] tracking-widest text-slate-400 uppercase">
           <div className="space-y-1">
             <p>STATUS: <span className={status === 'ONLINE' ? 'text-green-500' : 'text-slate-400'}>{status}</span></p>
-            <p>VOICE: FEMALE (KORE)</p>
+            <p>VOICE: <span className={isSpeaking ? 'text-blue-500' : 'text-slate-400'}>{isSpeaking ? 'SPEAKING' : 'READY'}</span></p>
           </div>
           <div className="text-right space-y-1">
             <p>LANG: FR / EN</p>
