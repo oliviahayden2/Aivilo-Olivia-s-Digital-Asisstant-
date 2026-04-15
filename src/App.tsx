@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import VoiceAssistant from './components/VoiceAssistant';
 import { Language } from './types';
-import { Globe, Linkedin, FileDown, MapPin } from 'lucide-react';
+import { Globe, Linkedin, Mail, MapPin } from 'lucide-react';
 import { motion } from 'motion/react';
 import { OLIVIA_CV } from './constants';
 
@@ -40,15 +40,18 @@ export default function App() {
               href={data.linkedin} 
               target="_blank" 
               rel="noopener noreferrer"
-              className="w-10 h-10 rounded-full border border-slate-200 flex items-center justify-center hover:bg-ink hover:text-cream transition-all"
+              className="group flex items-center gap-3 px-4 h-10 rounded-full border border-slate-200 hover:bg-ink hover:text-cream transition-all"
             >
               <Linkedin size={18} />
+              <span className="text-[10px] font-mono tracking-widest uppercase hidden md:inline">LinkedIn</span>
             </a>
             <a 
               href={`mailto:${data.email}`}
-              className="w-10 h-10 rounded-full border border-slate-200 flex items-center justify-center hover:bg-ink hover:text-cream transition-all"
+              className="group flex items-center gap-3 px-4 h-10 rounded-full border border-slate-200 hover:bg-ink hover:text-cream transition-all"
+              title={data.email}
             >
-              <FileDown size={18} />
+              <Mail size={18} />
+              <span className="text-[10px] font-mono tracking-widest uppercase hidden md:inline">{data.email}</span>
             </a>
             <button 
               onClick={() => setLanguage(language === 'en' ? 'fr' : 'en')}

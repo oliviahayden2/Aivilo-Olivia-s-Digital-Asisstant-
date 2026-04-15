@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
-import { Mic, MicOff, Loader2, Volume2, VolumeX, AlertCircle } from 'lucide-react';
+import { Mic, MicOff, Loader2, Volume2, VolumeX, AlertCircle, Mail, Linkedin, Send } from 'lucide-react';
 import { Language } from '../types';
 import { OLIVIA_CV } from '../constants';
 
@@ -15,6 +15,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
   const [error, setError] = useState<string | null>(null);
   const [transcriptions, setTranscriptions] = useState<{ role: 'user' | 'assistant', text: string }[]>([]);
   const [currentTranscription, setCurrentTranscription] = useState<{ role: 'user' | 'assistant', text: string } | null>(null);
+  const [inputText, setInputText] = useState('');
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -25,8 +26,6 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
-
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
   const systemInstruction = `
     You are Aivilo, the elite, bilingual AI Talent Agent for Olivia Hayden.
@@ -74,6 +73,16 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
       }
     };
   }, []);
+
+  const transcriptionsEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    transcriptionsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [transcriptions, currentTranscription]);
 
   const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
     let binary = '';
@@ -128,17 +137,33 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
       setStatus('CONNECTING');
       setError(null);
 
+      const apiKey = process.env.GEMINI_API_KEY;
+      console.log("Connecting to Gemini Live API...");
+      console.log("API Key present:", !!apiKey);
+      
+      if (!apiKey || apiKey === "undefined" || apiKey === "") {
+        throw new Error("GEMINI_API_KEY is missing. Please set it in the Settings menu.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+
       // Initialize Audio Context
       if (!audioContextRef.current) {
+        console.log("Initializing AudioContext...");
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       }
       
       const ctx = audioContextRef.current;
-      if (ctx.state === 'suspended') await ctx.resume();
+      if (ctx.state === 'suspended') {
+        console.log("Resuming AudioContext...");
+        await ctx.resume();
+      }
 
       // Get Microphone
+      console.log("Requesting microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      console.log("Microphone access granted.");
 
       // Setup Visualizer Analyser
       const source = ctx.createMediaStreamSource(stream);
@@ -148,42 +173,55 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
       analyserRef.current = analyser;
 
       // Connect to Live API
+      console.log("Opening Live API connection...");
       const sessionPromise = ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
         callbacks: {
           onopen: () => {
+            console.log("Live API Connection Opened successfully.");
             setStatus('ONLINE');
             
             // Start streaming audio
-            const processor = ctx.createScriptProcessor(4096, 1, 1);
-            processorRef.current = processor;
-            source.connect(processor);
-            processor.connect(ctx.destination);
+            try {
+              const processor = ctx.createScriptProcessor(4096, 1, 1);
+              processorRef.current = processor;
+              source.connect(processor);
+              processor.connect(ctx.destination);
 
-            processor.onaudioprocess = (e) => {
-              if (statusRef.current === 'ONLINE' && sessionRef.current) {
-                try {
-                  const inputData = e.inputBuffer.getChannelData(0);
-                  const pcm16 = new Int16Array(inputData.length);
-                  for (let i = 0; i < inputData.length; i++) {
-                    pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+              processor.onaudioprocess = (e) => {
+                if (statusRef.current === 'ONLINE') {
+                  try {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    const pcm16 = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                      pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                    }
+                    const base64 = arrayBufferToBase64(pcm16.buffer);
+                    sessionPromise.then(session => {
+                      session.sendRealtimeInput({
+                        audio: { data: base64, mimeType: 'audio/pcm;rate=16000' }
+                      });
+                    }).catch(err => {
+                      console.error("Error sending audio via promise:", err);
+                    });
+                  } catch (err) {
+                    console.error("Error processing audio chunk:", err);
                   }
-                  const base64 = arrayBufferToBase64(pcm16.buffer);
-                  sessionRef.current.sendRealtimeInput({
-                    audio: { data: base64, mimeType: 'audio/pcm;rate=16000' }
-                  });
-                } catch (err) {
-                  console.error("Error sending audio:", err);
                 }
-              }
-            };
+              };
+            } catch (err) {
+              console.error("Error setting up audio processor:", err);
+              setError("Failed to start audio processing. Please refresh.");
+            }
           },
           onmessage: async (message: LiveServerMessage) => {
+            console.log("Message from Gemini:", message);
             try {
               const serverContent = message.serverContent as any;
+              if (!serverContent) return;
 
               // Handle User Transcription
-              const userTurn = serverContent?.userTurn;
+              const userTurn = serverContent.userTurn;
               if (userTurn?.parts) {
                 const text = userTurn.parts.map((p: any) => p.text).join(' ').trim();
                 if (text) {
@@ -192,7 +230,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
               }
 
               // Handle Model Turn (Audio + Transcription)
-              const modelTurn = serverContent?.modelTurn;
+              const modelTurn = serverContent.modelTurn;
               if (modelTurn?.parts) {
                 for (const part of modelTurn.parts) {
                   if (part.inlineData?.data) {
@@ -201,7 +239,6 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
                     const bytes = new Uint8Array(binary.length);
                     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
                     
-                    // Ensure even number of bytes for Int16Array
                     const alignedLength = bytes.length - (bytes.length % 2);
                     const pcm16 = new Int16Array(bytes.buffer.slice(0, alignedLength));
                     const float32 = new Float32Array(pcm16.length);
@@ -222,14 +259,14 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
               }
 
               // Handle Turn Completion / Interruption
-              if (serverContent?.turnComplete) {
+              if (serverContent.turnComplete) {
                 setCurrentTranscription(prev => {
                   if (prev) setTranscriptions(t => [...t, prev]);
                   return null;
                 });
               }
 
-              if (serverContent?.interrupted) {
+              if (serverContent.interrupted) {
                 audioQueueRef.current = [];
                 isPlayingRef.current = false;
                 setIsSpeaking(false);
@@ -243,11 +280,24 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
             }
           },
           onerror: (err) => {
-            console.error("Live API Error:", err);
-            setError("Connection error. Please try again.");
+            console.error("Live API Error Callback:", err);
+            let message = "Unknown error";
+            if (err instanceof Error) {
+              message = err.message;
+            } else if (typeof err === 'object' && err !== null) {
+              try {
+                message = JSON.stringify(err);
+              } catch (e) {
+                message = "Complex error object";
+              }
+            } else {
+              message = String(err);
+            }
+            setError(`Connection error: ${message}`);
             setStatus('OFFLINE');
           },
           onclose: () => {
+            console.log("Live API Connection Closed.");
             setStatus('OFFLINE');
           }
         },
@@ -263,6 +313,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
       });
 
       sessionRef.current = await sessionPromise;
+      console.log("Session established.");
       
       // Wait a moment for the session to stabilize
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -274,9 +325,12 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
         });
       }
 
+      return sessionRef.current;
+
     } catch (err) {
       console.error("Failed to connect:", err);
-      setError("Microphone access denied or connection failed.");
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Failed to connect: ${message}`);
       setStatus('OFFLINE');
     }
   };
@@ -357,6 +411,29 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
     };
   }, [status, isSpeaking]);
 
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!inputText.trim()) return;
+
+    const text = inputText.trim();
+    setInputText('');
+    setTranscriptions(prev => [...prev, { role: 'user', text }]);
+
+    try {
+      let session = sessionRef.current;
+      if (status === 'OFFLINE') {
+        session = await connect();
+      }
+
+      if (session) {
+        session.sendRealtimeInput({ text });
+      }
+    } catch (err) {
+      console.error("Error sending text message:", err);
+      setError("Failed to send message. Please check your connection.");
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-3xl mx-auto">
       <motion.div 
@@ -414,7 +491,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
         </div>
 
         {/* Transcription / Status */}
-        <div className="min-h-[120px] max-h-[200px] overflow-y-auto mb-12 px-8 custom-scrollbar">
+        <div className="min-h-[120px] max-h-[200px] overflow-y-auto mb-8 px-8 custom-scrollbar">
           <AnimatePresence mode="popLayout">
             {error ? (
               <motion.div 
@@ -463,6 +540,8 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
                   </motion.div>
                 )}
 
+                <div ref={transcriptionsEndRef} />
+
                 {status === 'ONLINE' && !currentTranscription && transcriptions.length === 0 && (
                   <motion.p 
                     key="idle"
@@ -479,7 +558,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                     className="text-slate-400 text-sm text-center py-4"
                   >
-                    Click the microphone to start conversation
+                    Click the microphone or type below to start conversation
                   </motion.p>
                 )}
               </div>
@@ -487,13 +566,54 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
           </AnimatePresence>
         </div>
 
+        {/* Chat Input */}
+        <div className="px-8 mb-12">
+          <form 
+            onSubmit={handleSendMessage}
+            className="relative flex items-center"
+          >
+            <input 
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Type a message..."
+              className="w-full bg-slate-50 border border-slate-100 rounded-full py-4 px-6 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-ink/5 transition-all placeholder:text-slate-300"
+            />
+            <button 
+              type="submit"
+              disabled={!inputText.trim()}
+              className="absolute right-2 w-10 h-10 bg-ink text-cream rounded-full flex items-center justify-center hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 transition-all"
+            >
+              <Send size={18} />
+            </button>
+          </form>
+        </div>
+
         {/* Footer Info */}
-        <div className="border-t border-slate-100 pt-8 flex justify-between items-end font-mono text-[10px] tracking-widest text-slate-400 uppercase">
-          <div className="space-y-1">
+        <div className="border-t border-slate-100 pt-8 flex flex-col md:flex-row justify-between items-center md:items-end gap-6 font-mono text-[10px] tracking-widest text-slate-400 uppercase">
+          <div className="flex flex-col items-center md:items-start gap-1">
             <p>STATUS: <span className={status === 'ONLINE' ? 'text-green-500' : 'text-slate-400'}>{status}</span></p>
             <p>VOICE: <span className={isSpeaking ? 'text-blue-500' : 'text-slate-400'}>{isSpeaking ? 'SPEAKING' : 'READY'}</span></p>
           </div>
-          <div className="text-right space-y-1">
+          
+          <div className="flex items-center gap-6">
+            <a 
+              href={`mailto:${OLIVIA_CV[language].email}`}
+              className="flex items-center gap-2 hover:text-ink transition-colors"
+            >
+              <Mail size={12} /> EMAIL
+            </a>
+            <a 
+              href={OLIVIA_CV[language].linkedin}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 hover:text-ink transition-colors"
+            >
+              <Linkedin size={12} /> LINKEDIN
+            </a>
+          </div>
+
+          <div className="text-center md:text-right space-y-1">
             <p>LANG: FR / EN</p>
             <p>MODEL: GEMINI 3.1 LIVE</p>
           </div>
