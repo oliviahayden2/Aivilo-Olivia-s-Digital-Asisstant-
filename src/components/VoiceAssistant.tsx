@@ -439,18 +439,18 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full glass-card rounded-[40px] p-12 shadow-2xl relative overflow-hidden"
+        className="w-full glass-card rounded-[30px] md:rounded-[40px] p-6 md:p-12 shadow-2xl relative overflow-hidden"
       >
         {/* Header */}
-        <div className="text-center mb-12">
-          <h2 className="font-serif italic text-4xl mb-2">Olivia's Assistant</h2>
-          <p className="text-xs tracking-[0.2em] uppercase text-slate-400 font-mono">
+        <div className="text-center mb-8 md:mb-12">
+          <h2 className="font-serif italic text-3xl md:text-4xl mb-2">Olivia's Assistant</h2>
+          <p className="text-[10px] tracking-[0.2em] uppercase text-slate-400 font-mono">
             {status === 'ONLINE' ? 'VOICE INTERACTION ENABLED' : 'VOICE INTERACTION DISABLED'}
           </p>
         </div>
 
         {/* Visualizer Area */}
-        <div className="relative flex items-center justify-center h-64 mb-12">
+        <div className="relative flex items-center justify-center h-48 md:h-64 mb-8 md:mb-12">
           <canvas 
             ref={canvasRef} 
             width={400} 
@@ -491,15 +491,24 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
         </div>
 
         {/* Transcription / Status */}
-        <div className="min-h-[120px] max-h-[200px] overflow-y-auto mb-8 px-8 custom-scrollbar">
+        <div className="min-h-[150px] max-h-[300px] overflow-y-auto mb-6 px-8 custom-scrollbar">
           <AnimatePresence mode="popLayout">
             {error ? (
               <motion.div 
                 key="error"
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                className="flex items-center justify-center gap-2 text-red-500 text-sm py-4"
+                className="flex flex-col items-center justify-center gap-4 text-red-500 text-sm py-8"
               >
-                <AlertCircle size={16} /> {error}
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={20} />
+                  <span className="font-medium">{error}</span>
+                </div>
+                <button 
+                  onClick={() => { setError(null); connect(); }}
+                  className="px-6 py-2 bg-red-50 text-red-600 rounded-full hover:bg-red-100 transition-colors font-mono text-[10px] tracking-widest uppercase"
+                >
+                  Retry Connection
+                </button>
               </motion.div>
             ) : (
               <div className="space-y-4">
@@ -567,7 +576,7 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
         </div>
 
         {/* Chat Input */}
-        <div className="px-8 mb-12">
+        <div className="px-8 mb-8">
           <form 
             onSubmit={handleSendMessage}
             className="relative flex items-center"
@@ -576,15 +585,15 @@ const VoiceAssistant: React.FC<VoiceAssistantProps> = ({ language }) => {
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Type a message..."
+              placeholder={status === 'OFFLINE' ? "Type to start chatting..." : "Type a message..."}
               className="w-full bg-slate-50 border border-slate-100 rounded-full py-4 px-6 pr-14 text-sm focus:outline-none focus:ring-2 focus:ring-ink/5 transition-all placeholder:text-slate-300"
             />
             <button 
               type="submit"
-              disabled={!inputText.trim()}
+              disabled={!inputText.trim() || status === 'CONNECTING'}
               className="absolute right-2 w-10 h-10 bg-ink text-cream rounded-full flex items-center justify-center hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 transition-all"
             >
-              <Send size={18} />
+              {status === 'CONNECTING' ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           </form>
         </div>

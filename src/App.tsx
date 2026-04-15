@@ -10,7 +10,7 @@ export default function App() {
   const data = OLIVIA_CV[language];
 
   return (
-    <div className="min-h-screen bg-cream selection:bg-ink selection:text-cream font-sans text-ink p-8 md:p-16">
+    <div className="min-h-screen bg-cream selection:bg-ink selection:text-cream font-sans text-ink p-8 md:p-16 pb-32">
       {/* Header Section */}
       <header className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center mb-32 gap-8">
         <motion.div 
